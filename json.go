@@ -180,7 +180,9 @@ func (jsc *JSONSendCommand) Execute(pluginLogger plugin.Logger,
 
 	select {
 	case err := <-errChan:
-		pluginLogger.LogTask(slogger.ERROR, "Sending json data failed: %v", err)
+		if err != nil {
+			pluginLogger.LogTask(slogger.ERROR, "Sending json data failed: %v", err)
+		}
 		return err
 	case <-stop:
 		pluginLogger.LogExecution(slogger.INFO, "Received abort signal, stopping.")
