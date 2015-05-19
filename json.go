@@ -9,6 +9,7 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/gorilla/mux"
 	"github.com/mitchellh/mapstructure"
+	"labix.org/v2/mgo"
 	"labix.org/v2/mgo/bson"
 	"net/http"
 	"os"
@@ -32,14 +33,15 @@ func (jsp *JSONPlugin) Name() string {
 }
 
 type TaskJSON struct {
-	Name                string                 `bson:"name"`
-	TaskId              string                 `bson:"task_id"`
-	BuildId             string                 `bson:"build_id"`
-	Variant             string                 `bson:"variant"`
-	VersionId           string                 `bson:"version_id"`
-	RevisionOrderNumber int                    `bson:"order"`
-	Revision            string                 `bson:"revision"`
-	Data                map[string]interface{} `bson:"data"`
+	Name                string                 `bson:"name" json:"name"`
+	ProjectId           string                 `bson:"project_id" json:"project_id"`
+	TaskId              string                 `bson:"task_id" json:"task_id"`
+	BuildId             string                 `bson:"build_id" json:"build_id"`
+	Variant             string                 `bson:"variant" json:"variant"`
+	VersionId           string                 `bson:"version_id" json:"version_id"`
+	RevisionOrderNumber int                    `bson:"order" json:"order"`
+	Revision            string                 `bson:"revision" json:"revision"`
+	Data                map[string]interface{} `bson:"data" json:"data"`
 }
 
 // GetRoutes returns an API route for serving patch data.
@@ -65,6 +67,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			BuildId:             task.BuildId,
 			Variant:             task.BuildVariant,
 			VersionId:           task.Version,
+			Revision:            task.Revision,
 			RevisionOrderNumber: task.RevisionOrderNumber,
 			Data:                rawData,
 		}
@@ -80,7 +83,19 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 }
 
 func (hwp *JSONPlugin) GetUIHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	r := mux.NewRouter()
+	r.HandleFunc("/task/{task_id}/", func(w http.ResponseWriter, r *http.Request) {
+		var jsonForTask TaskJSON
+		err := db.FindOneQ(collection, db.Query(bson.M{"task_id": mux.Vars(r)["task_id"]}), &jsonForTask)
+		if err != nil {
+			if err != mgo.ErrNotFound {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			http.Error(w, "{}", http.StatusNotFound)
+		}
+		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
+	})
+	return r
 }
 
 func (jsp *JSONPlugin) Configure(map[string]interface{}) error {
