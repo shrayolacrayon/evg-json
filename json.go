@@ -36,6 +36,7 @@ type TaskJSON struct {
 	Name                string                 `bson:"name" json:"name"`
 	ProjectId           string                 `bson:"project_id" json:"project_id"`
 	TaskId              string                 `bson:"task_id" json:"task_id"`
+	TaskName            string                 `bson:"task_name" json:"task_name"`
 	BuildId             string                 `bson:"build_id" json:"build_id"`
 	Variant             string                 `bson:"variant" json:"variant"`
 	VersionId           string                 `bson:"version_id" json:"version_id"`
@@ -64,6 +65,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		jsonBlob := TaskJSON{
 			TaskId:              task.Id,
 			Name:                name,
+			TaskName:            task.DisplayName,
 			BuildId:             task.BuildId,
 			Variant:             task.BuildVariant,
 			VersionId:           task.Version,
@@ -94,6 +96,35 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			http.Error(w, "{}", http.StatusNotFound)
 		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
+	})
+	r.HandleFunc("/history/{task_id}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		t, err := model.FindTask(mux.Vars(r)["task_id"])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		if t == nil {
+			http.Error(w, "{}", http.StatusNotFound)
+		}
+
+		before := []TaskJSON{}
+		err = db.FindAllQ(collection, db.Query(bson.M{"project_id": t.Project, "variant": t.BuildVariant, "order": bson.M{"$lte": t.RevisionOrderNumber}, "name": mux.Vars(r)["name"]}).Sort([]string{"-order"}).Limit(200), &before)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		//reverse order of "before" because we had to sort it backwards to apply the limit correctly:
+		for i, j := 0, len(before)-1; i < j; i, j = i+1, j-1 {
+			before[i], before[j] = before[j], before[i]
+		}
+
+		after := []TaskJSON{}
+		err = db.FindAllQ(collection, db.Query(bson.M{"project_id": t.Project, "variant": t.BuildVariant, "order": bson.M{"$gt": t.RevisionOrderNumber}, "name": mux.Vars(r)["name"]}).Sort([]string{"order"}).Limit(100), &after)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+
+		//concatenate before + after
+		before = append(before, after...)
+		plugin.WriteJSON(w, http.StatusOK, before)
 	})
 	return r
 }
