@@ -65,6 +65,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		jsonBlob := TaskJSON{
 			TaskId:              task.Id,
 			Name:                name,
+			ProjectId:           task.Project,
 			TaskName:            task.DisplayName,
 			BuildId:             task.BuildId,
 			Variant:             task.BuildVariant,
