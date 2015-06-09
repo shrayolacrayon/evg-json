@@ -34,6 +34,7 @@ func (jsp *JSONPlugin) Name() string {
 
 type TaskJSON struct {
 	Name                string                 `bson:"name" json:"name"`
+	TaskName            string                 `bson:"task_name" json:"task_name"`
 	ProjectId           string                 `bson:"project_id" json:"project_id"`
 	TaskId              string                 `bson:"task_id" json:"task_id"`
 	BuildId             string                 `bson:"build_id" json:"build_id"`
@@ -62,6 +63,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		}
 		jsonBlob := TaskJSON{
 			TaskId:              task.Id,
+			TaskName:            task.DisplayName,
 			Name:                name,
 			BuildId:             task.BuildId,
 			Variant:             task.BuildVariant,
@@ -87,9 +89,9 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 	r.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
 		plugin.WriteJSON(w, http.StatusOK, "1")
 	})
-	r.HandleFunc("/task/{task_id}/", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/task/{task_id}/{name}/", func(w http.ResponseWriter, r *http.Request) {
 		var jsonForTask TaskJSON
-		err := db.FindOneQ(collection, db.Query(bson.M{"task_id": mux.Vars(r)["task_id"]}), &jsonForTask)
+		err := db.FindOneQ(collection, db.Query(bson.M{"task_id": mux.Vars(r)["task_id"], "name": mux.Vars(r)["name"]}), &jsonForTask)
 		if err != nil {
 			if err != mgo.ErrNotFound {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -100,12 +102,13 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
 	})
-	r.HandleFunc("/commit/{project_id}/{revision}/{variant}", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		var jsonForTask TaskJSON
 		err := db.FindOneQ(collection,
 			db.Query(bson.M{"project_id": mux.Vars(r)["project_id"],
 				"revision": mux.Vars(r)["revision"],
 				"variant":  mux.Vars(r)["variant"],
+				"name":     mux.Vars(r)["name"],
 			}), &jsonForTask)
 		if err != nil {
 			if err != mgo.ErrNotFound {
@@ -129,7 +132,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		}
 
 		before := []TaskJSON{}
-		err = db.FindAllQ(collection, db.Query(bson.M{"project_id": t.Project, "variant": t.BuildVariant, "order": bson.M{"$lte": t.RevisionOrderNumber}, "name": mux.Vars(r)["name"]}).Sort([]string{"-order"}).Limit(200), &before)
+		err = db.FindAllQ(collection, db.Query(bson.M{"project_id": t.Project, "variant": t.BuildVariant, "order": bson.M{"$lte": t.RevisionOrderNumber}, "task_name": t.DisplayName, "name": mux.Vars(r)["name"]}).Sort([]string{"-order"}).Limit(200), &before)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
