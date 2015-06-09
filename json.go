@@ -102,13 +102,14 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
 	})
-	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{name}", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		var jsonForTask TaskJSON
 		err := db.FindOneQ(collection,
 			db.Query(bson.M{"project_id": mux.Vars(r)["project_id"],
-				"revision": mux.Vars(r)["revision"],
-				"variant":  mux.Vars(r)["variant"],
-				"name":     mux.Vars(r)["name"],
+				"revision":  mux.Vars(r)["revision"],
+				"variant":   mux.Vars(r)["variant"],
+				"task_name": mux.Vars(r)["task_name"],
+				"name":      mux.Vars(r)["name"],
 			}), &jsonForTask)
 		if err != nil {
 			if err != mgo.ErrNotFound {
