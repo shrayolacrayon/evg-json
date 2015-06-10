@@ -9,6 +9,7 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/gorilla/mux"
 	"github.com/mitchellh/mapstructure"
+	"io/ioutil"
 	"labix.org/v2/mgo"
 	"labix.org/v2/mgo/bson"
 	"net/http"
@@ -55,31 +56,44 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			return
 		}
 		name := mux.Vars(r)["name"]
-		rawData := map[string]interface{}{}
-		err := util.ReadJSONInto(r.Body, &rawData)
+		if r.Method == "POST" {
+			rawData := map[string]interface{}{}
+			err := util.ReadJSONInto(r.Body, &rawData)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			jsonBlob := TaskJSON{
+				TaskId:              task.Id,
+				TaskName:            task.DisplayName,
+				Name:                name,
+				BuildId:             task.BuildId,
+				Variant:             task.BuildVariant,
+				ProjectId:           task.Project,
+				VersionId:           task.Version,
+				Revision:            task.Revision,
+				RevisionOrderNumber: task.RevisionOrderNumber,
+				Data:                rawData,
+			}
+			_, err = db.Upsert(collection, bson.M{"task_id": task.Id}, jsonBlob)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			plugin.WriteJSON(w, http.StatusOK, "ok")
+			return
+		}
+		var jsonForTask TaskJSON
+		err := db.FindOneQ(collection, db.Query(bson.M{"task_id": task.Id, "name": name}), &jsonForTask)
 		if err != nil {
+			if err == mgo.ErrNotFound {
+				plugin.WriteJSON(w, http.StatusNotFound, nil)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonBlob := TaskJSON{
-			TaskId:              task.Id,
-			TaskName:            task.DisplayName,
-			Name:                name,
-			BuildId:             task.BuildId,
-			Variant:             task.BuildVariant,
-			ProjectId:           task.Project,
-			VersionId:           task.Version,
-			Revision:            task.Revision,
-			RevisionOrderNumber: task.RevisionOrderNumber,
-			Data:                rawData,
-		}
-		_, err = db.Upsert(collection, bson.M{"task_id": task.Id}, jsonBlob)
-		if err != nil {
-			fmt.Println("error inserting", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, "ok")
+		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
 	})
 	return r
 }
@@ -185,6 +199,8 @@ func (jsp *JSONPlugin) GetPanelConfig() (*plugin.PanelConfig, error) {
 func (jsp *JSONPlugin) NewCommand(cmdName string) (plugin.Command, error) {
 	if cmdName == "send" {
 		return &JSONSendCommand{}, nil
+	} else if cmdName == "get" {
+		return &JSONGetCommand{}, nil
 	}
 	return nil, &plugin.ErrUnknownCommand{cmdName}
 }
@@ -262,4 +278,76 @@ func (jsc *JSONSendCommand) Execute(pluginLogger plugin.Logger,
 		pluginLogger.LogExecution(slogger.INFO, "Received abort signal, stopping.")
 		return nil
 	}
+}
+
+type JSONGetCommand struct {
+	File     string `mapstructure:"file" plugin:"expand"`
+	DataName string `mapstructure:"name" plugin:"expand"`
+}
+
+func (jgc *JSONGetCommand) Name() string {
+	return "get"
+}
+
+func (jgc *JSONGetCommand) Plugin() string {
+	return "json"
+}
+
+func (jgc *JSONGetCommand) ParseParams(params map[string]interface{}) error {
+	if err := mapstructure.Decode(params, jgc); err != nil {
+		return fmt.Errorf("error decoding '%v' params: %v", jgc.Name(), err)
+	}
+	if jgc.File == "" {
+		return fmt.Errorf("JSON 'get' command must not have blank 'file' parameter")
+	}
+	return nil
+}
+
+func (jgc *JSONGetCommand) Execute(pluginLogger plugin.Logger,
+	pluginCom plugin.PluginCommunicator,
+	taskConfig *model.TaskConfig,
+	stop chan bool) error {
+
+	err := plugin.ExpandValues(jgc, taskConfig.Expansions)
+	if err != nil {
+		return err
+	}
+	if jgc.File == "" {
+		return fmt.Errorf("JSON 'get' command must not have blank 'file' parameter")
+	}
+
+	if jgc.File != "" && !filepath.IsAbs(jgc.File) {
+		jgc.File = filepath.Join(taskConfig.WorkDir, jgc.File)
+	}
+
+	retriableGet := util.RetriableFunc(
+		func() error {
+			resp, err := pluginCom.TaskGetJSON(fmt.Sprintf("data/%s", jgc.DataName))
+			if resp != nil {
+				defer resp.Body.Close()
+			}
+			if err != nil {
+				//Some generic error trying to connect - try again
+				pluginLogger.LogExecution(slogger.WARN, "Error connecting to API server: %v", err)
+				return util.RetriableError{err}
+			}
+
+			if resp.StatusCode == http.StatusOK {
+				jsonBytes, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					return err
+				}
+				return ioutil.WriteFile(jgc.File, jsonBytes, 0755)
+			}
+			if resp.StatusCode != http.StatusOK {
+				if resp.StatusCode == http.StatusNotFound {
+					return fmt.Errorf("No JSON data found")
+				}
+				return util.RetriableError{fmt.Errorf("unexpected status code %v", resp.StatusCode)}
+			}
+			return nil
+		},
+	)
+	_, err = util.Retry(retriableGet, 10, 3*time.Second)
+	return err
 }
