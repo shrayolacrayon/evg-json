@@ -162,7 +162,14 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		}
 
 		before := []TaskJSON{}
-		err = db.FindAllQ(collection, db.Query(bson.M{"project_id": t.Project, "variant": t.BuildVariant, "order": bson.M{"$lte": t.RevisionOrderNumber}, "task_name": t.DisplayName, "name": mux.Vars(r)["name"]}).Sort([]string{"-order"}).Limit(200), &before)
+		jsonQuery := db.Query(bson.M{
+			"project_id": t.Project,
+			"variant":    t.BuildVariant,
+			"order":      bson.M{"$lte": t.RevisionOrderNumber},
+			"task_name":  t.DisplayName,
+			"name":       mux.Vars(r)["name"]})
+		jsonQuery = jsonQuery.Sort([]string{"-order"}).Limit(200)
+		err = db.FindAllQ(collection, jsonQuery, &before)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -173,7 +180,13 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		}
 
 		after := []TaskJSON{}
-		err = db.FindAllQ(collection, db.Query(bson.M{"project_id": t.Project, "variant": t.BuildVariant, "order": bson.M{"$gt": t.RevisionOrderNumber}, "name": mux.Vars(r)["name"]}).Sort([]string{"order"}).Limit(100), &after)
+		jsonAfterQuery := db.Query(bson.M{
+			"project_id": t.Project,
+			"variant":    t.BuildVariant,
+			"order":      bson.M{"$gt": t.RevisionOrderNumber},
+			"task_name":  t.DisplayName,
+			"name":       mux.Vars(r)["name"]}).Sort([]string{"order"}).Limit(100)
+		err = db.FindAllQ(collection, jsonAfterQuery, &after)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
