@@ -56,43 +56,58 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			return
 		}
 		name := mux.Vars(r)["name"]
-		if r.Method == "POST" {
-			rawData := map[string]interface{}{}
-			err := util.ReadJSONInto(r.Body, &rawData)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			jsonBlob := TaskJSON{
-				TaskId:              task.Id,
-				TaskName:            task.DisplayName,
-				Name:                name,
-				BuildId:             task.BuildId,
-				Variant:             task.BuildVariant,
-				ProjectId:           task.Project,
-				VersionId:           task.Version,
-				Revision:            task.Revision,
-				RevisionOrderNumber: task.RevisionOrderNumber,
-				Data:                rawData,
-			}
-			_, err = db.Upsert(collection, bson.M{"task_id": task.Id}, jsonBlob)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			plugin.WriteJSON(w, http.StatusOK, "ok")
+		rawData := map[string]interface{}{}
+		err := util.ReadJSONInto(r.Body, &rawData)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		var jsonForTask TaskJSON
-		err := db.FindOneQ(collection, db.Query(bson.M{"task_id": task.Id, "name": name}), &jsonForTask)
+		jsonBlob := TaskJSON{
+			TaskId:              task.Id,
+			TaskName:            task.DisplayName,
+			Name:                name,
+			BuildId:             task.BuildId,
+			Variant:             task.BuildVariant,
+			ProjectId:           task.Project,
+			VersionId:           task.Version,
+			Revision:            task.Revision,
+			RevisionOrderNumber: task.RevisionOrderNumber,
+			Data:                rawData,
+		}
+		_, err = db.Upsert(collection, bson.M{"task_id": task.Id}, jsonBlob)
 		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		plugin.WriteJSON(w, http.StatusOK, "ok")
+		return
+	})
+
+	r.HandleFunc("/data/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("fetching task")
+		task := plugin.GetTask(r)
+		if task == nil {
+			http.Error(w, "task not found", http.StatusNotFound)
+			return
+		}
+		name := mux.Vars(r)["name"]
+		taskName := mux.Vars(r)["task_name"]
+		var jsonForTask TaskJSON
+		fmt.Println("running query")
+		q := bson.M{"version_id": task.Version, "build_id": task.BuildId, "name": name, "task_name": taskName}
+		fmt.Println("query is", q)
+		err := db.FindOneQ(collection, db.Query(bson.M{"version_id": task.Version, "build_id": task.BuildId, "name": name, "task_name": taskName}), &jsonForTask)
+		if err != nil {
+			fmt.Println("query err is not nill")
 			if err == mgo.ErrNotFound {
 				plugin.WriteJSON(w, http.StatusNotFound, nil)
 				return
 			}
+			fmt.Println("err is", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		fmt.Println("writing respons", jsonForTask.Data)
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
 	})
 	return r
@@ -229,6 +244,12 @@ func (jsc *JSONSendCommand) Execute(pluginLogger plugin.Logger,
 	pluginCom plugin.PluginCommunicator,
 	taskConfig *model.TaskConfig,
 	stop chan bool) error {
+	if jsc.File == "" {
+		return fmt.Errorf("'file' param must not be blank")
+	}
+	if jsc.DataName == "" {
+		return fmt.Errorf("'name' param must not be blank")
+	}
 
 	errChan := make(chan error)
 	go func() {
@@ -283,6 +304,7 @@ func (jsc *JSONSendCommand) Execute(pluginLogger plugin.Logger,
 type JSONGetCommand struct {
 	File     string `mapstructure:"file" plugin:"expand"`
 	DataName string `mapstructure:"name" plugin:"expand"`
+	TaskName string `mapstructure:"task" plugin:"expand"`
 }
 
 func (jgc *JSONGetCommand) Name() string {
@@ -312,8 +334,15 @@ func (jgc *JSONGetCommand) Execute(pluginLogger plugin.Logger,
 	if err != nil {
 		return err
 	}
+
 	if jgc.File == "" {
-		return fmt.Errorf("JSON 'get' command must not have blank 'file' parameter")
+		return fmt.Errorf("'file' param must not be blank")
+	}
+	if jgc.DataName == "" {
+		return fmt.Errorf("'name' param must not be blank")
+	}
+	if jgc.TaskName == "" {
+		return fmt.Errorf("'task' param must not be blank")
 	}
 
 	if jgc.File != "" && !filepath.IsAbs(jgc.File) {
@@ -322,7 +351,7 @@ func (jgc *JSONGetCommand) Execute(pluginLogger plugin.Logger,
 
 	retriableGet := util.RetriableFunc(
 		func() error {
-			resp, err := pluginCom.TaskGetJSON(fmt.Sprintf("data/%s", jgc.DataName))
+			resp, err := pluginCom.TaskGetJSON(fmt.Sprintf("data/%s/%s", jgc.TaskName, jgc.DataName))
 			if resp != nil {
 				defer resp.Body.Close()
 			}
