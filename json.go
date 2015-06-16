@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"github.com/10gen-labs/slogger/v1"
+	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/plugin"
@@ -41,6 +42,7 @@ type TaskJSON struct {
 	BuildId             string                 `bson:"build_id" json:"build_id"`
 	Variant             string                 `bson:"variant" json:"variant"`
 	VersionId           string                 `bson:"version_id" json:"version_id"`
+	IsPatch             bool                   `bson:"is_patch" json:"is_patch"`
 	RevisionOrderNumber int                    `bson:"order" json:"order"`
 	Revision            string                 `bson:"revision" json:"revision"`
 	Data                map[string]interface{} `bson:"data" json:"data"`
@@ -73,6 +75,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			Revision:            task.Revision,
 			RevisionOrderNumber: task.RevisionOrderNumber,
 			Data:                rawData,
+			IsPatch:             task.Requester == evergreen.PatchVersionRequester,
 		}
 		_, err = db.Upsert(collection, bson.M{"task_id": task.Id}, jsonBlob)
 		if err != nil {
@@ -84,7 +87,6 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 	})
 
 	r.HandleFunc("/data/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("fetching task")
 		task := plugin.GetTask(r)
 		if task == nil {
 			http.Error(w, "task not found", http.StatusNotFound)
@@ -93,21 +95,15 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		name := mux.Vars(r)["name"]
 		taskName := mux.Vars(r)["task_name"]
 		var jsonForTask TaskJSON
-		fmt.Println("running query")
-		q := bson.M{"version_id": task.Version, "build_id": task.BuildId, "name": name, "task_name": taskName}
-		fmt.Println("query is", q)
 		err := db.FindOneQ(collection, db.Query(bson.M{"version_id": task.Version, "build_id": task.BuildId, "name": name, "task_name": taskName}), &jsonForTask)
 		if err != nil {
-			fmt.Println("query err is not nill")
 			if err == mgo.ErrNotFound {
 				plugin.WriteJSON(w, http.StatusNotFound, nil)
 				return
 			}
-			fmt.Println("err is", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		fmt.Println("writing respons", jsonForTask.Data)
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
 	})
 	return r
@@ -139,6 +135,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 				"variant":   mux.Vars(r)["variant"],
 				"task_name": mux.Vars(r)["task_name"],
 				"name":      mux.Vars(r)["name"],
+				"is_patch":  false,
 			}), &jsonForTask)
 		if err != nil {
 			if err != mgo.ErrNotFound {
@@ -167,6 +164,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			"variant":    t.BuildVariant,
 			"order":      bson.M{"$lte": t.RevisionOrderNumber},
 			"task_name":  t.DisplayName,
+			"is_patch":   false,
 			"name":       mux.Vars(r)["name"]})
 		jsonQuery = jsonQuery.Sort([]string{"-order"}).Limit(200)
 		err = db.FindAllQ(collection, jsonQuery, &before)
@@ -185,6 +183,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			"variant":    t.BuildVariant,
 			"order":      bson.M{"$gt": t.RevisionOrderNumber},
 			"task_name":  t.DisplayName,
+			"is_patch":   false,
 			"name":       mux.Vars(r)["name"]}).Sort([]string{"order"}).Limit(100)
 		err = db.FindAllQ(collection, jsonAfterQuery, &after)
 		if err != nil {
