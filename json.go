@@ -10,12 +10,13 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/gorilla/mux"
 	"github.com/mitchellh/mapstructure"
+	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 	"io/ioutil"
-	"labix.org/v2/mgo"
-	"labix.org/v2/mgo/bson"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
 
@@ -131,7 +132,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		var jsonForTask TaskJSON
 		err := db.FindOneQ(collection,
 			db.Query(bson.M{"project_id": mux.Vars(r)["project_id"],
-				"revision":  mux.Vars(r)["revision"],
+				"revision":  bson.RegEx{"^" + regexp.QuoteMeta(mux.Vars(r)["revision"]), "i"},
 				"variant":   mux.Vars(r)["variant"],
 				"task_name": mux.Vars(r)["task_name"],
 				"name":      mux.Vars(r)["name"],
