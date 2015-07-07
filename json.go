@@ -47,6 +47,7 @@ type TaskJSON struct {
 	RevisionOrderNumber int                    `bson:"order" json:"order"`
 	Revision            string                 `bson:"revision" json:"revision"`
 	Data                map[string]interface{} `bson:"data" json:"data"`
+	Tag                 string                 `bson:"tag" json:"tag"`
 }
 
 // GetRoutes returns an API route for serving patch data.
@@ -127,6 +128,59 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			return
 		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
+	})
+
+	r.HandleFunc("/task/{task_id}/{name}/tags", func(w http.ResponseWriter, r *http.Request) {
+		t, err := model.FindTask(mux.Vars(r)["task_id"])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		tagsQuery := db.Query(bson.M{
+			"project_id": t.Project,
+			"name":       mux.Vars(r)["name"],
+			"tag":        bson.M{"$exists": true},
+		}).WithFields("tag", "task_id")
+		tagged := []TaskJSON{}
+		err = db.FindAllQ(collection, tagsQuery, &tagged)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		plugin.WriteJSON(w, http.StatusOK, tagged)
+	})
+	r.HandleFunc("/task/{task_id}/{name}/tag", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			if err := db.Update(collection,
+				bson.M{"task_id": mux.Vars(r)["task_id"], "name": mux.Vars(r)["name"]},
+				bson.M{"$unset": bson.M{"tag": 1}}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			plugin.WriteJSON(w, http.StatusOK, "")
+		}
+		inTag := struct {
+			Tag string `json:"tag"`
+		}{}
+		err := util.ReadJSONInto(r.Body, &inTag)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(inTag.Tag) == 0 {
+			http.Error(w, "tag must not be blank", http.StatusBadRequest)
+			return
+		}
+
+		err = db.Update(collection,
+			bson.M{"task_id": mux.Vars(r)["task_id"], "name": mux.Vars(r)["name"]},
+			bson.M{"$set": bson.M{"tag": inTag.Tag}})
+
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		plugin.WriteJSON(w, http.StatusOK, "")
 	})
 	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		var jsonForTask TaskJSON
