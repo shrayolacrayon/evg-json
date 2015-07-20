@@ -136,18 +136,18 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		tagsQuery := db.Query(bson.M{
-			"project_id": t.Project,
-			"name":       mux.Vars(r)["name"],
-			"tag":        bson.M{"$exists": true},
-		}).WithFields("tag")
-		tagged := []TaskJSON{}
-		err = db.FindAllQ(collection, tagsQuery, &tagged)
+		tags := []struct {
+			Tag string `bson:"_id" json:"tag"`
+		}{}
+		err = db.Aggregate(collection, []bson.M{
+			{"$match": bson.M{"project_id": t.Project, "tag": bson.M{"$exists": true, "$ne": ""}}},
+			{"$project": bson.M{"tag": 1}}, bson.M{"$group": bson.M{"_id": "$tag"}},
+		}, &tags)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		plugin.WriteJSON(w, http.StatusOK, tagged)
+		plugin.WriteJSON(w, http.StatusOK, tags)
 	})
 	r.HandleFunc("/task/{task_id}/{name}/tag", func(w http.ResponseWriter, r *http.Request) {
 		t, err := model.FindTask(mux.Vars(r)["task_id"])
