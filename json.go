@@ -140,7 +140,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			"project_id": t.Project,
 			"name":       mux.Vars(r)["name"],
 			"tag":        bson.M{"$exists": true},
-		}).WithFields("tag", "task_id")
+		}).WithFields("tag")
 		tagged := []TaskJSON{}
 		err = db.FindAllQ(collection, tagsQuery, &tagged)
 		if err != nil {
@@ -150,9 +150,18 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		plugin.WriteJSON(w, http.StatusOK, tagged)
 	})
 	r.HandleFunc("/task/{task_id}/{name}/tag", func(w http.ResponseWriter, r *http.Request) {
+		t, err := model.FindTask(mux.Vars(r)["task_id"])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if t == nil {
+			http.Error(w, "{}", http.StatusNotFound)
+			return
+		}
 		if r.Method == "DELETE" {
-			if err := db.Update(collection,
-				bson.M{"task_id": mux.Vars(r)["task_id"], "name": mux.Vars(r)["name"]},
+			if _, err = db.UpdateAll(collection,
+				bson.M{"version_id": t.Version, "name": mux.Vars(r)["name"]},
 				bson.M{"$unset": bson.M{"tag": 1}}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -162,7 +171,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		inTag := struct {
 			Tag string `json:"tag"`
 		}{}
-		err := util.ReadJSONInto(r.Body, &inTag)
+		err = util.ReadJSONInto(r.Body, &inTag)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -172,8 +181,8 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			return
 		}
 
-		err = db.Update(collection,
-			bson.M{"task_id": mux.Vars(r)["task_id"], "name": mux.Vars(r)["name"]},
+		_, err = db.UpdateAll(collection,
+			bson.M{"version_id": t.Version, "name": mux.Vars(r)["name"]},
 			bson.M{"$set": bson.M{"tag": inTag.Tag}})
 
 		if err != nil {
@@ -181,6 +190,26 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			return
 		}
 		plugin.WriteJSON(w, http.StatusOK, "")
+	})
+	r.HandleFunc("/tag/{project_id}/{tag}/{variant}/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		var jsonForTask TaskJSON
+		err := db.FindOneQ(collection,
+			db.Query(bson.M{"project_id": mux.Vars(r)["project_id"],
+				"tag":       mux.Vars(r)["tag"],
+				"variant":   mux.Vars(r)["variant"],
+				"task_name": mux.Vars(r)["task_name"],
+				"name":      mux.Vars(r)["name"],
+				"is_patch":  false,
+			}), &jsonForTask)
+		if err != nil {
+			if err != mgo.ErrNotFound {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			http.Error(w, "{}", http.StatusNotFound)
+			return
+		}
+		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
 	})
 	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		var jsonForTask TaskJSON
