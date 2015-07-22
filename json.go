@@ -199,7 +199,6 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 				"variant":   mux.Vars(r)["variant"],
 				"task_name": mux.Vars(r)["task_name"],
 				"name":      mux.Vars(r)["name"],
-				"is_patch":  false,
 			}), &jsonForTask)
 		if err != nil {
 			if err != mgo.ErrNotFound {
