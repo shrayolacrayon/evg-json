@@ -249,7 +249,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			"task_name":  t.DisplayName,
 			"is_patch":   false,
 			"name":       mux.Vars(r)["name"]})
-		jsonQuery = jsonQuery.Sort([]string{"-order"}).Limit(200)
+		jsonQuery = jsonQuery.Sort([]string{"-order"}).Limit(100)
 		err = db.FindAllQ(collection, jsonQuery, &before)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
