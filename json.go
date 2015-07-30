@@ -53,6 +53,50 @@ type TaskJSON struct {
 // GetRoutes returns an API route for serving patch data.
 func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 	r := mux.NewRouter()
+	r.HandleFunc("/history/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("in api handler!")
+		t := plugin.GetTask(r)
+		if t == nil {
+			http.Error(w, "task not found", http.StatusNotFound)
+			return
+		}
+		before := []TaskJSON{}
+		jsonQuery := db.Query(bson.M{
+			"project_id": t.Project,
+			"variant":    t.BuildVariant,
+			"order":      bson.M{"$lte": t.RevisionOrderNumber},
+			"task_name":  mux.Vars(r)["task_name"],
+			"is_patch":   false,
+			"name":       mux.Vars(r)["name"]}).Sort([]string{"-order"}).Limit(100)
+		err := db.FindAllQ(collection, jsonQuery, &before)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		//reverse order of "before" because we had to sort it backwards to apply the limit correctly:
+		for i, j := 0, len(before)-1; i < j; i, j = i+1, j-1 {
+			before[i], before[j] = before[j], before[i]
+		}
+
+		after := []TaskJSON{}
+		jsonAfterQuery := db.Query(bson.M{
+			"project_id": t.Project,
+			"variant":    t.BuildVariant,
+			"order":      bson.M{"$gt": t.RevisionOrderNumber},
+			"task_name":  mux.Vars(r)["task_name"],
+			"is_patch":   false,
+			"name":       mux.Vars(r)["name"]}).Sort([]string{"order"}).Limit(100)
+		err = db.FindAllQ(collection, jsonAfterQuery, &after)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		//concatenate before + after
+		before = append(before, after...)
+		plugin.WriteJSON(w, http.StatusOK, before)
+	})
+
 	r.HandleFunc("/data/{name}", func(w http.ResponseWriter, r *http.Request) {
 		task := plugin.GetTask(r)
 		if task == nil {
@@ -311,6 +355,8 @@ func (jsp *JSONPlugin) NewCommand(cmdName string) (plugin.Command, error) {
 		return &JSONSendCommand{}, nil
 	} else if cmdName == "get" {
 		return &JSONGetCommand{}, nil
+	} else if cmdName == "get_history" {
+		return &JSONHistoryCommand{}, nil
 	}
 	return nil, &plugin.ErrUnknownCommand{cmdName}
 }
@@ -335,10 +381,7 @@ func (jsc *JSONSendCommand) ParseParams(params map[string]interface{}) error {
 	return nil
 }
 
-func (jsc *JSONSendCommand) Execute(pluginLogger plugin.Logger,
-	pluginCom plugin.PluginCommunicator,
-	taskConfig *model.TaskConfig,
-	stop chan bool) error {
+func (jsc *JSONSendCommand) Execute(log plugin.Logger, com plugin.PluginCommunicator, conf *model.TaskConfig, stop chan bool) error {
 	if jsc.File == "" {
 		return fmt.Errorf("'file' param must not be blank")
 	}
@@ -349,7 +392,7 @@ func (jsc *JSONSendCommand) Execute(pluginLogger plugin.Logger,
 	errChan := make(chan error)
 	go func() {
 		// attempt to open the file
-		fileLoc := filepath.Join(taskConfig.WorkDir, jsc.File)
+		fileLoc := filepath.Join(conf.WorkDir, jsc.File)
 		jsonFile, err := os.Open(fileLoc)
 		if err != nil {
 			errChan <- fmt.Errorf("Couldn't open json file: '%v'", err)
@@ -365,8 +408,8 @@ func (jsc *JSONSendCommand) Execute(pluginLogger plugin.Logger,
 
 		retriablePost := util.RetriableFunc(
 			func() error {
-				pluginLogger.LogTask(slogger.INFO, "Posting JSON")
-				resp, err := pluginCom.TaskPostJSON(fmt.Sprintf("data/%v", jsc.DataName), jsonData)
+				log.LogTask(slogger.INFO, "Posting JSON")
+				resp, err := com.TaskPostJSON(fmt.Sprintf("data/%v", jsc.DataName), jsonData)
 				if resp != nil {
 					defer resp.Body.Close()
 				}
@@ -387,11 +430,11 @@ func (jsc *JSONSendCommand) Execute(pluginLogger plugin.Logger,
 	select {
 	case err := <-errChan:
 		if err != nil {
-			pluginLogger.LogTask(slogger.ERROR, "Sending json data failed: %v", err)
+			log.LogTask(slogger.ERROR, "Sending json data failed: %v", err)
 		}
 		return err
 	case <-stop:
-		pluginLogger.LogExecution(slogger.INFO, "Received abort signal, stopping.")
+		log.LogExecution(slogger.INFO, "Received abort signal, stopping.")
 		return nil
 	}
 }
@@ -402,11 +445,25 @@ type JSONGetCommand struct {
 	TaskName string `mapstructure:"task" plugin:"expand"`
 }
 
+type JSONHistoryCommand struct {
+	File     string `mapstructure:"file" plugin:"expand"`
+	DataName string `mapstructure:"name" plugin:"expand"`
+	TaskName string `mapstructure:"task" plugin:"expand"`
+}
+
 func (jgc *JSONGetCommand) Name() string {
 	return "get"
 }
 
+func (jgc *JSONHistoryCommand) Name() string {
+	return "history"
+}
+
 func (jgc *JSONGetCommand) Plugin() string {
+	return "json"
+}
+
+func (jgc *JSONHistoryCommand) Plugin() string {
 	return "json"
 }
 
@@ -420,12 +477,19 @@ func (jgc *JSONGetCommand) ParseParams(params map[string]interface{}) error {
 	return nil
 }
 
-func (jgc *JSONGetCommand) Execute(pluginLogger plugin.Logger,
-	pluginCom plugin.PluginCommunicator,
-	taskConfig *model.TaskConfig,
-	stop chan bool) error {
+func (jgc *JSONHistoryCommand) ParseParams(params map[string]interface{}) error {
+	if err := mapstructure.Decode(params, jgc); err != nil {
+		return fmt.Errorf("error decoding '%v' params: %v", jgc.Name(), err)
+	}
+	if jgc.File == "" {
+		return fmt.Errorf("JSON 'history' command must not have blank 'file' parameter")
+	}
+	return nil
+}
 
-	err := plugin.ExpandValues(jgc, taskConfig.Expansions)
+func (jgc *JSONGetCommand) Execute(log plugin.Logger, com plugin.PluginCommunicator, conf *model.TaskConfig, stop chan bool) error {
+
+	err := plugin.ExpandValues(jgc, conf.Expansions)
 	if err != nil {
 		return err
 	}
@@ -441,18 +505,70 @@ func (jgc *JSONGetCommand) Execute(pluginLogger plugin.Logger,
 	}
 
 	if jgc.File != "" && !filepath.IsAbs(jgc.File) {
-		jgc.File = filepath.Join(taskConfig.WorkDir, jgc.File)
+		jgc.File = filepath.Join(conf.WorkDir, jgc.File)
 	}
 
 	retriableGet := util.RetriableFunc(
 		func() error {
-			resp, err := pluginCom.TaskGetJSON(fmt.Sprintf("data/%s/%s", jgc.TaskName, jgc.DataName))
+			resp, err := com.TaskGetJSON(fmt.Sprintf("data/%s/%s", jgc.TaskName, jgc.DataName))
 			if resp != nil {
 				defer resp.Body.Close()
 			}
 			if err != nil {
 				//Some generic error trying to connect - try again
-				pluginLogger.LogExecution(slogger.WARN, "Error connecting to API server: %v", err)
+				log.LogExecution(slogger.WARN, "Error connecting to API server: %v", err)
+				return util.RetriableError{err}
+			}
+
+			if resp.StatusCode == http.StatusOK {
+				jsonBytes, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					return err
+				}
+				return ioutil.WriteFile(jgc.File, jsonBytes, 0755)
+			}
+			if resp.StatusCode != http.StatusOK {
+				if resp.StatusCode == http.StatusNotFound {
+					return fmt.Errorf("No JSON data found")
+				}
+				return util.RetriableError{fmt.Errorf("unexpected status code %v", resp.StatusCode)}
+			}
+			return nil
+		},
+	)
+	_, err = util.Retry(retriableGet, 10, 3*time.Second)
+	return err
+}
+
+func (jgc *JSONHistoryCommand) Execute(log plugin.Logger, com plugin.PluginCommunicator, conf *model.TaskConfig, stop chan bool) error {
+	err := plugin.ExpandValues(jgc, conf.Expansions)
+	if err != nil {
+		return err
+	}
+
+	if jgc.File == "" {
+		return fmt.Errorf("'file' param must not be blank")
+	}
+	if jgc.DataName == "" {
+		return fmt.Errorf("'name' param must not be blank")
+	}
+	if jgc.TaskName == "" {
+		return fmt.Errorf("'task' param must not be blank")
+	}
+
+	if jgc.File != "" && !filepath.IsAbs(jgc.File) {
+		jgc.File = filepath.Join(conf.WorkDir, jgc.File)
+	}
+
+	retriableGet := util.RetriableFunc(
+		func() error {
+			resp, err := com.TaskGetJSON(fmt.Sprintf("history/%s/%s", jgc.TaskName, jgc.DataName))
+			if resp != nil {
+				defer resp.Body.Close()
+			}
+			if err != nil {
+				//Some generic error trying to connect - try again
+				log.LogExecution(slogger.WARN, "Error connecting to API server: %v", err)
 				return util.RetriableError{err}
 			}
 
