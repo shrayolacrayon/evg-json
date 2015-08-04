@@ -123,7 +123,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			Data:                rawData,
 			IsPatch:             task.Requester == evergreen.PatchVersionRequester,
 		}
-		_, err = db.Upsert(collection, bson.M{"task_id": task.Id}, jsonBlob)
+		_, err = db.Upsert(collection, bson.M{"task_id": task.Id, "name": name}, jsonBlob)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
