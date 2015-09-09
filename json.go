@@ -53,8 +53,27 @@ type TaskJSON struct {
 // GetRoutes returns an API route for serving patch data.
 func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 	r := mux.NewRouter()
+	r.HandleFunc("/tags/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		t := plugin.GetTask(r)
+		if t == nil {
+			http.Error(w, "task not found", http.StatusNotFound)
+			return
+		}
+		tagged := []TaskJSON{}
+		jsonQuery := db.Query(bson.M{
+			"project_id": t.Project,
+			"variant":    t.BuildVariant,
+			"task_name":  mux.Vars(r)["task_name"],
+			"tag":        bson.M{"$exists": true, "$ne": ""},
+			"name":       mux.Vars(r)["name"]})
+		err := db.FindAllQ(collection, jsonQuery, &tagged)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		plugin.WriteJSON(w, http.StatusOK, tagged)
+	})
 	r.HandleFunc("/history/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("in api handler!")
 		t := plugin.GetTask(r)
 		if t == nil {
 			http.Error(w, "task not found", http.StatusNotFound)
@@ -446,6 +465,7 @@ type JSONGetCommand struct {
 }
 
 type JSONHistoryCommand struct {
+	Tags     bool   `mapstructure:"tags"`
 	File     string `mapstructure:"file" plugin:"expand"`
 	DataName string `mapstructure:"name" plugin:"expand"`
 	TaskName string `mapstructure:"task" plugin:"expand"`
@@ -560,9 +580,14 @@ func (jgc *JSONHistoryCommand) Execute(log plugin.Logger, com plugin.PluginCommu
 		jgc.File = filepath.Join(conf.WorkDir, jgc.File)
 	}
 
+	endpoint := fmt.Sprintf("history/%s/%s", jgc.TaskName, jgc.DataName)
+	if jgc.Tags {
+		endpoint = fmt.Sprintf("tags/%s/%s", jgc.TaskName, jgc.DataName)
+	}
+
 	retriableGet := util.RetriableFunc(
 		func() error {
-			resp, err := com.TaskGetJSON(fmt.Sprintf("history/%s/%s", jgc.TaskName, jgc.DataName))
+			resp, err := com.TaskGetJSON(endpoint)
 			if resp != nil {
 				defer resp.Body.Close()
 			}
