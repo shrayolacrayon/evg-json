@@ -171,6 +171,39 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
 	})
+	r.HandleFunc("/data/{task_name}/{name}/{variant}", func(w http.ResponseWriter, r *http.Request) {
+		task := plugin.GetTask(r)
+		if task == nil {
+			http.Error(w, "task not found", http.StatusNotFound)
+			return
+		}
+		name := mux.Vars(r)["name"]
+		taskName := mux.Vars(r)["task_name"]
+		variantId := mux.Vars(r)["variant"]
+		// Find the task for the other variant, if it exists
+		ts, err := model.FindTasks(db.Query(bson.M{model.TaskVersionKey: task.Version, model.TaskBuildVariantKey: variantId, model.TaskDisplayNameKey: taskName}).Limit(1))
+		if err != nil {
+			if err == mgo.ErrNotFound {
+				plugin.WriteJSON(w, http.StatusNotFound, nil)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		otherVariantTask := ts[0]
+
+		var jsonForTask TaskJSON
+		err = db.FindOneQ(collection, db.Query(bson.M{"task_id": otherVariantTask.Id, "name": name}), &jsonForTask)
+		if err != nil {
+			if err == mgo.ErrNotFound {
+				plugin.WriteJSON(w, http.StatusNotFound, nil)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
+	})
 	return r
 }
 
@@ -462,6 +495,7 @@ type JSONGetCommand struct {
 	File     string `mapstructure:"file" plugin:"expand"`
 	DataName string `mapstructure:"name" plugin:"expand"`
 	TaskName string `mapstructure:"task" plugin:"expand"`
+	Variant  string `mapstructure:"variant" plugin:"expand"`
 }
 
 type JSONHistoryCommand struct {
@@ -530,7 +564,11 @@ func (jgc *JSONGetCommand) Execute(log plugin.Logger, com plugin.PluginCommunica
 
 	retriableGet := util.RetriableFunc(
 		func() error {
-			resp, err := com.TaskGetJSON(fmt.Sprintf("data/%s/%s", jgc.TaskName, jgc.DataName))
+			dataUrl := fmt.Sprintf("data/%s/%s", jgc.TaskName, jgc.DataName)
+			if jgc.Variant != "" {
+				dataUrl = fmt.Sprintf("data/%s/%s/%s", jgc.TaskName, jgc.DataName, jgc.Variant)
+			}
+			resp, err := com.TaskGetJSON(dataUrl)
 			if resp != nil {
 				defer resp.Body.Close()
 			}
