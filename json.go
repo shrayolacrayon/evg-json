@@ -190,6 +190,12 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if len(ts) == 0 {
+			if err == mgo.ErrNotFound {
+				plugin.WriteJSON(w, http.StatusNotFound, nil)
+				return
+			}
+		}
 		otherVariantTask := ts[0]
 
 		var jsonForTask TaskJSON
