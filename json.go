@@ -43,6 +43,7 @@ type TaskJSON struct {
 	BuildId             string                 `bson:"build_id" json:"build_id"`
 	Variant             string                 `bson:"variant" json:"variant"`
 	VersionId           string                 `bson:"version_id" json:"version_id"`
+	CreateTime          time.Time              `bson:"create_time" json:"create_time"`
 	IsPatch             bool                   `bson:"is_patch" json:"is_patch"`
 	RevisionOrderNumber int                    `bson:"order" json:"order"`
 	Revision            string                 `bson:"revision" json:"revision"`
@@ -137,6 +138,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			Variant:             task.BuildVariant,
 			ProjectId:           task.Project,
 			VersionId:           task.Version,
+			CreateTime:          task.CreateTime,
 			Revision:            task.Revision,
 			RevisionOrderNumber: task.RevisionOrderNumber,
 			Data:                rawData,
