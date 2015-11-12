@@ -161,6 +161,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		}
 		name := mux.Vars(r)["name"]
 		taskName := mux.Vars(r)["task_name"]
+
 		var jsonForTask TaskJSON
 		err := db.FindOneQ(collection, db.Query(bson.M{"version_id": task.Version, "build_id": task.BuildId, "name": name, "task_name": taskName}), &jsonForTask)
 		if err != nil {
@@ -169,6 +170,10 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 				return
 			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(r.FormValue("full")) != 0 { // if specified, include the json data's container as well
+			plugin.WriteJSON(w, http.StatusOK, jsonForTask)
 			return
 		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
@@ -206,6 +211,10 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 				return
 			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(r.FormValue("full")) != 0 { // if specified, include the json data's container as well
+			plugin.WriteJSON(w, http.StatusOK, jsonForTask)
 			return
 		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
@@ -310,6 +319,10 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			http.Error(w, "{}", http.StatusNotFound)
 			return
 		}
+		if len(r.FormValue("full")) != 0 { // if specified, include the json data's container as well
+			plugin.WriteJSON(w, http.StatusOK, jsonForTask)
+			return
+		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
 	})
 	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +341,10 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 				return
 			}
 			http.Error(w, "{}", http.StatusNotFound)
+			return
+		}
+		if len(r.FormValue("full")) != 0 { // if specified, include the json data's container as well
+			plugin.WriteJSON(w, http.StatusOK, jsonForTask)
 			return
 		}
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
