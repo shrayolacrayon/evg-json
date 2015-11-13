@@ -136,6 +136,9 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			if t2 != nil {
+				jsonForTask.RevisionOrderNumber = t2.RevisionOrderNumber
+			}
 
 			found := false
 			for i, item := range before {
