@@ -130,27 +130,10 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 
 		// if our task was a patch, replace the base commit's info in the history with the patch
 		if t.Requester == evergreen.PatchVersionRequester {
-			var jsonForTask TaskJSON
-			err := db.FindOneQ(collection, db.Query(bson.M{"task_id": t.Id}), &jsonForTask)
+			before, err = fixPatchInHistory(t.Id, t2, before)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
-			}
-			if t2 != nil {
-				jsonForTask.RevisionOrderNumber = t2.RevisionOrderNumber
-			}
-
-			found := false
-			for i, item := range before {
-				if item.Revision == t.Revision {
-					before[i] = jsonForTask
-					found = true
-				}
-			}
-			// if found is false, it means we don't have json on the base commit, so it was
-			// not replaced and we must add it explicitly
-			if !found {
-				before = append(before, jsonForTask)
 			}
 		}
 		plugin.WriteJSON(w, http.StatusOK, before)
@@ -399,6 +382,16 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			return
 		}
 
+		var t2 *model.Task = t
+		if t.Requester == evergreen.PatchVersionRequester {
+			t2, err = t.FindTaskOnBaseCommit()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			t.RevisionOrderNumber = t2.RevisionOrderNumber
+		}
+
 		before := []TaskJSON{}
 		jsonQuery := db.Query(bson.M{
 			"project_id": t.Project,
@@ -434,9 +427,46 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 
 		//concatenate before + after
 		before = append(before, after...)
+
+		// if our task was a patch, replace the base commit's info in the history with the patch
+		if t.Requester == evergreen.PatchVersionRequester {
+			before, err = fixPatchInHistory(t.Id, t2, before)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		plugin.WriteJSON(w, http.StatusOK, before)
 	})
 	return r
+}
+
+func fixPatchInHistory(taskId string, base *model.Task, history []TaskJSON) ([]TaskJSON, error) {
+	var jsonForTask *TaskJSON
+	err := db.FindOneQ(collection, db.Query(bson.M{"task_id": taskId}), jsonForTask)
+	if err != nil {
+		return nil, err
+	}
+	if base != nil {
+		jsonForTask.RevisionOrderNumber = base.RevisionOrderNumber
+	}
+	if jsonForTask == nil {
+		return history, nil
+	}
+
+	found := false
+	for i, item := range history {
+		if item.Revision == base.Revision {
+			history[i] = *jsonForTask
+			found = true
+		}
+	}
+	// if found is false, it means we don't have json on the base commit, so it was
+	// not replaced and we must add it explicitly
+	if !found {
+		history = append(history, *jsonForTask)
+	}
+	return history, nil
 }
 
 func (jsp *JSONPlugin) Configure(map[string]interface{}) error {
