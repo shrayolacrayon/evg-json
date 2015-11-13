@@ -80,6 +80,19 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			http.Error(w, "task not found", http.StatusNotFound)
 			return
 		}
+
+		var t2 *model.Task = t
+		var err error
+
+		if t.Requester == evergreen.PatchVersionRequester {
+			t2, err = t.FindTaskOnBaseCommit()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			t.RevisionOrderNumber = t2.RevisionOrderNumber
+		}
+
 		before := []TaskJSON{}
 		jsonQuery := db.Query(bson.M{
 			"project_id": t.Project,
@@ -88,7 +101,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			"task_name":  mux.Vars(r)["task_name"],
 			"is_patch":   false,
 			"name":       mux.Vars(r)["name"]}).Sort([]string{"-order"}).Limit(100)
-		err := db.FindAllQ(collection, jsonQuery, &before)
+		err = db.FindAllQ(collection, jsonQuery, &before)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -114,6 +127,29 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 
 		//concatenate before + after
 		before = append(before, after...)
+
+		// if our task was a patch, replace the base commit's info in the history with the patch
+		if t.Requester == evergreen.PatchVersionRequester {
+			var jsonForTask TaskJSON
+			err := db.FindOneQ(collection, db.Query(bson.M{"task_id": t.Id}), &jsonForTask)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			found := false
+			for i, item := range before {
+				if item.Revision == t.Revision {
+					before[i] = jsonForTask
+					found = true
+				}
+			}
+			// if found is false, it means we don't have json on the base commit, so it was
+			// not replaced and we must add it explicitly
+			if !found {
+				before = append(before, jsonForTask)
+			}
+		}
 		plugin.WriteJSON(w, http.StatusOK, before)
 	})
 
