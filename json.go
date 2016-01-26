@@ -81,7 +81,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			return
 		}
 
-		var t2 *model.Task = t
+		var t2 *task.Task = t
 		var err error
 
 		if t.Requester == evergreen.PatchVersionRequester {
@@ -210,7 +210,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		taskName := mux.Vars(r)["task_name"]
 		variantId := mux.Vars(r)["variant"]
 		// Find the task for the other variant, if it exists
-		ts, err := model.FindTasks(db.Query(bson.M{model.TaskVersionKey: task.Version, model.TaskBuildVariantKey: variantId, model.TaskDisplayNameKey: taskName}).Limit(1))
+		ts, err := task.Find(db.Query(bson.M{task.VersionKey: task.Version, task.BuildVariantKey: variantId, task.DisplayNameKey: taskName}).Limit(1))
 		if err != nil {
 			if err == mgo.ErrNotFound {
 				plugin.WriteJSON(w, http.StatusNotFound, nil)
@@ -264,7 +264,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 	})
 
 	r.HandleFunc("/task/{task_id}/{name}/tags", func(w http.ResponseWriter, r *http.Request) {
-		t, err := model.FindTask(mux.Vars(r)["task_id"])
+		t, err := task.FindOne(task.ById(mux.Vars(r)["task_id"]))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -283,7 +283,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		plugin.WriteJSON(w, http.StatusOK, tags)
 	})
 	r.HandleFunc("/task/{task_id}/{name}/tag", func(w http.ResponseWriter, r *http.Request) {
-		t, err := model.FindTask(mux.Vars(r)["task_id"])
+		t, err := task.FindOne(task.ById(mux.Vars(r)["task_id"]))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -372,7 +372,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
 	})
 	r.HandleFunc("/history/{task_id}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		t, err := model.FindTask(mux.Vars(r)["task_id"])
+		t, err := task.FindOne(task.ById(mux.Vars(r)["task_id"]))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -382,7 +382,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			return
 		}
 
-		var t2 *model.Task = t
+		var t2 * = t
 		if t.Requester == evergreen.PatchVersionRequester {
 			t2, err = t.FindTaskOnBaseCommit()
 			if err != nil {
@@ -441,7 +441,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 	return r
 }
 
-func fixPatchInHistory(taskId string, base *model.Task, history []TaskJSON) ([]TaskJSON, error) {
+func fixPatchInHistory(taskId string, base *, history []TaskJSON) ([]TaskJSON, error) {
 	var jsonForTask *TaskJSON
 	err := db.FindOneQ(collection, db.Query(bson.M{"task_id": taskId}), &jsonForTask)
 	if err != nil {
