@@ -140,8 +140,8 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 	})
 
 	r.HandleFunc("/data/{name}", func(w http.ResponseWriter, r *http.Request) {
-		task := plugin.GetTask(r)
-		if task == nil {
+		t := plugin.GetTask(r)
+		if t == nil {
 			http.Error(w, "task not found", http.StatusNotFound)
 			return
 		}
@@ -153,20 +153,20 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 			return
 		}
 		jsonBlob := TaskJSON{
-			TaskId:              task.Id,
-			TaskName:            task.DisplayName,
+			TaskId:              t.Id,
+			TaskName:            t.DisplayName,
 			Name:                name,
-			BuildId:             task.BuildId,
-			Variant:             task.BuildVariant,
-			ProjectId:           task.Project,
-			VersionId:           task.Version,
-			CreateTime:          task.CreateTime,
-			Revision:            task.Revision,
-			RevisionOrderNumber: task.RevisionOrderNumber,
+			BuildId:             t.BuildId,
+			Variant:             t.BuildVariant,
+			ProjectId:           t.Project,
+			VersionId:           t.Version,
+			CreateTime:          t.CreateTime,
+			Revision:            t.Revision,
+			RevisionOrderNumber: t.RevisionOrderNumber,
 			Data:                rawData,
-			IsPatch:             task.Requester == evergreen.PatchVersionRequester,
+			IsPatch:             t.Requester == evergreen.PatchVersionRequester,
 		}
-		_, err = db.Upsert(collection, bson.M{"task_id": task.Id, "name": name}, jsonBlob)
+		_, err = db.Upsert(collection, bson.M{"task_id": t.Id, "name": name}, jsonBlob)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -176,8 +176,8 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 	})
 
 	r.HandleFunc("/data/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		task := plugin.GetTask(r)
-		if task == nil {
+		t := plugin.GetTask(r)
+		if t == nil {
 			http.Error(w, "task not found", http.StatusNotFound)
 			return
 		}
@@ -185,7 +185,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		taskName := mux.Vars(r)["task_name"]
 
 		var jsonForTask TaskJSON
-		err := db.FindOneQ(collection, db.Query(bson.M{"version_id": task.Version, "build_id": task.BuildId, "name": name, "task_name": taskName}), &jsonForTask)
+		err := db.FindOneQ(collection, db.Query(bson.M{"version_id": t.Version, "build_id": t.BuildId, "name": name, "task_name": taskName}), &jsonForTask)
 		if err != nil {
 			if err == mgo.ErrNotFound {
 				plugin.WriteJSON(w, http.StatusNotFound, nil)
@@ -201,8 +201,8 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
 	})
 	r.HandleFunc("/data/{task_name}/{name}/{variant}", func(w http.ResponseWriter, r *http.Request) {
-		task := plugin.GetTask(r)
-		if task == nil {
+		t := plugin.GetTask(r)
+		if t == nil {
 			http.Error(w, "task not found", http.StatusNotFound)
 			return
 		}
@@ -210,7 +210,7 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		taskName := mux.Vars(r)["task_name"]
 		variantId := mux.Vars(r)["variant"]
 		// Find the task for the other variant, if it exists
-		ts, err := task.Find(db.Query(bson.M{task.VersionKey: task.Version, task.BuildVariantKey: variantId, task.DisplayNameKey: taskName}).Limit(1))
+		ts, err := task.Find(db.Query(bson.M{t.VersionKey: t.Version, t.BuildVariantKey: variantId, t.DisplayNameKey: taskName}).Limit(1))
 		if err != nil {
 			if err == mgo.ErrNotFound {
 				plugin.WriteJSON(w, http.StatusNotFound, nil)
