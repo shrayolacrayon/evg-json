@@ -382,7 +382,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 			return
 		}
 
-		var t2 * = t
+		var t2 *task.Task = t
 		if t.Requester == evergreen.PatchVersionRequester {
 			t2, err = t.FindTaskOnBaseCommit()
 			if err != nil {
