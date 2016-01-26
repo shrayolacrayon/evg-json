@@ -6,6 +6,7 @@ import (
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/plugin"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/gorilla/mux"
@@ -210,7 +211,8 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 		taskName := mux.Vars(r)["task_name"]
 		variantId := mux.Vars(r)["variant"]
 		// Find the task for the other variant, if it exists
-		ts, err := task.Find(db.Query(bson.M{t.VersionKey: t.Version, t.BuildVariantKey: variantId, t.DisplayNameKey: taskName}).Limit(1))
+		ts, err := task.Find(db.Query(bson.M{task.VersionKey: t.Version, task.BuildVariantKey: variantId,
+			task.DisplayNameKey: taskName}).Limit(1))
 		if err != nil {
 			if err == mgo.ErrNotFound {
 				plugin.WriteJSON(w, http.StatusNotFound, nil)
