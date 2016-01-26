@@ -441,7 +441,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 	return r
 }
 
-func fixPatchInHistory(taskId string, base *, history []TaskJSON) ([]TaskJSON, error) {
+func fixPatchInHistory(taskId string, base *task.Task, history []TaskJSON) ([]TaskJSON, error) {
 	var jsonForTask *TaskJSON
 	err := db.FindOneQ(collection, db.Query(bson.M{"task_id": taskId}), &jsonForTask)
 	if err != nil {
