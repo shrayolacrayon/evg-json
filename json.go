@@ -477,7 +477,6 @@ func (jsp *JSONPlugin) Configure(map[string]interface{}) error {
 // does not have any UI hooks.
 func (jsp *JSONPlugin) GetPanelConfig() (*plugin.PanelConfig, error) {
 	return &plugin.PanelConfig{
-		StaticRoot: plugin.StaticWebRootFromSourceFile(),
 		Panels: []plugin.UIPanel{
 			{
 				Page:      plugin.TaskPage,
