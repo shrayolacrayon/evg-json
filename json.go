@@ -3,21 +3,19 @@ package evgjson
 import (
 	"fmt"
 	"github.com/10gen-labs/slogger/v1"
-	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
+	"github.com/evergreen-ci/evergreen/db/bsonutil"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/plugin"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/gorilla/mux"
 	"github.com/mitchellh/mapstructure"
-	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
 )
 
@@ -52,394 +50,50 @@ type TaskJSON struct {
 	Tag                 string                 `bson:"tag" json:"tag"`
 }
 
+var (
+	// BSON fields for the TaskJSON struct
+	NameKey                = bsonutil.MustHaveTag(TaskJSON{}, "Name")
+	TaskNameKey            = bsonutil.MustHaveTag(TaskJSON{}, "TaskName")
+	ProjectIdKey           = bsonutil.MustHaveTag(TaskJSON{}, "ProjectId")
+	TaskIdKey              = bsonutil.MustHaveTag(TaskJSON{}, "TaskId")
+	BuildIdKey             = bsonutil.MustHaveTag(TaskJSON{}, "BuildId")
+	VariantKey             = bsonutil.MustHaveTag(TaskJSON{}, "Variant")
+	VersionIdKey           = bsonutil.MustHaveTag(TaskJSON{}, "VersionId")
+	CreateTimeKey          = bsonutil.MustHaveTag(TaskJSON{}, "CreateTime")
+	IsPatchKey             = bsonutil.MustHaveTag(TaskJSON{}, "IsPatch")
+	RevisionOrderNumberKey = bsonutil.MustHaveTag(TaskJSON{}, "RevisionOrderNumber")
+	RevisionKey            = bsonutil.MustHaveTag(TaskJSON{}, "Revision")
+	DataKey                = bsonutil.MustHaveTag(TaskJSON{}, "Data")
+	TagKey                 = bsonutil.MustHaveTag(TaskJSON{}, "Tag")
+)
+
 // GetRoutes returns an API route for serving patch data.
 func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 	r := mux.NewRouter()
-	r.HandleFunc("/tags/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		t := plugin.GetTask(r)
-		if t == nil {
-			http.Error(w, "task not found", http.StatusNotFound)
-			return
-		}
-		tagged := []TaskJSON{}
-		jsonQuery := db.Query(bson.M{
-			"project_id": t.Project,
-			"variant":    t.BuildVariant,
-			"task_name":  mux.Vars(r)["task_name"],
-			"tag":        bson.M{"$exists": true, "$ne": ""},
-			"name":       mux.Vars(r)["name"]})
-		err := db.FindAllQ(collection, jsonQuery, &tagged)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, tagged)
-	})
-	r.HandleFunc("/history/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		t := plugin.GetTask(r)
-		if t == nil {
-			http.Error(w, "task not found", http.StatusNotFound)
-			return
-		}
+	r.HandleFunc("/tags/{task_name}/{name}", getTaskByTag)
+	r.HandleFunc("/history/{task_name}/{name}", apiGetTaskHistory)
 
-		var t2 *task.Task = t
-		var err error
-
-		if t.Requester == evergreen.PatchVersionRequester {
-			t2, err = t.FindTaskOnBaseCommit()
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			t.RevisionOrderNumber = t2.RevisionOrderNumber
-		}
-
-		before := []TaskJSON{}
-		jsonQuery := db.Query(bson.M{
-			"project_id": t.Project,
-			"variant":    t.BuildVariant,
-			"order":      bson.M{"$lte": t.RevisionOrderNumber},
-			"task_name":  mux.Vars(r)["task_name"],
-			"is_patch":   false,
-			"name":       mux.Vars(r)["name"]}).Sort([]string{"-order"}).Limit(100)
-		err = db.FindAllQ(collection, jsonQuery, &before)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		//reverse order of "before" because we had to sort it backwards to apply the limit correctly:
-		for i, j := 0, len(before)-1; i < j; i, j = i+1, j-1 {
-			before[i], before[j] = before[j], before[i]
-		}
-
-		after := []TaskJSON{}
-		jsonAfterQuery := db.Query(bson.M{
-			"project_id": t.Project,
-			"variant":    t.BuildVariant,
-			"order":      bson.M{"$gt": t.RevisionOrderNumber},
-			"task_name":  mux.Vars(r)["task_name"],
-			"is_patch":   false,
-			"name":       mux.Vars(r)["name"]}).Sort([]string{"order"}).Limit(100)
-		err = db.FindAllQ(collection, jsonAfterQuery, &after)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		//concatenate before + after
-		before = append(before, after...)
-
-		// if our task was a patch, replace the base commit's info in the history with the patch
-		if t.Requester == evergreen.PatchVersionRequester {
-			before, err = fixPatchInHistory(t.Id, t2, before)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-		plugin.WriteJSON(w, http.StatusOK, before)
-	})
-
-	r.HandleFunc("/data/{name}", func(w http.ResponseWriter, r *http.Request) {
-		t := plugin.GetTask(r)
-		if t == nil {
-			http.Error(w, "task not found", http.StatusNotFound)
-			return
-		}
-		name := mux.Vars(r)["name"]
-		rawData := map[string]interface{}{}
-		err := util.ReadJSONInto(r.Body, &rawData)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		jsonBlob := TaskJSON{
-			TaskId:              t.Id,
-			TaskName:            t.DisplayName,
-			Name:                name,
-			BuildId:             t.BuildId,
-			Variant:             t.BuildVariant,
-			ProjectId:           t.Project,
-			VersionId:           t.Version,
-			CreateTime:          t.CreateTime,
-			Revision:            t.Revision,
-			RevisionOrderNumber: t.RevisionOrderNumber,
-			Data:                rawData,
-			IsPatch:             t.Requester == evergreen.PatchVersionRequester,
-		}
-		_, err = db.Upsert(collection, bson.M{"task_id": t.Id, "name": name}, jsonBlob)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, "ok")
-		return
-	})
-
-	r.HandleFunc("/data/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		t := plugin.GetTask(r)
-		if t == nil {
-			http.Error(w, "task not found", http.StatusNotFound)
-			return
-		}
-		name := mux.Vars(r)["name"]
-		taskName := mux.Vars(r)["task_name"]
-
-		var jsonForTask TaskJSON
-		err := db.FindOneQ(collection, db.Query(bson.M{"version_id": t.Version, "build_id": t.BuildId, "name": name, "task_name": taskName}), &jsonForTask)
-		if err != nil {
-			if err == mgo.ErrNotFound {
-				plugin.WriteJSON(w, http.StatusNotFound, nil)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(r.FormValue("full")) != 0 { // if specified, include the json data's container as well
-			plugin.WriteJSON(w, http.StatusOK, jsonForTask)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
-	})
-	r.HandleFunc("/data/{task_name}/{name}/{variant}", func(w http.ResponseWriter, r *http.Request) {
-		t := plugin.GetTask(r)
-		if t == nil {
-			http.Error(w, "task not found", http.StatusNotFound)
-			return
-		}
-		name := mux.Vars(r)["name"]
-		taskName := mux.Vars(r)["task_name"]
-		variantId := mux.Vars(r)["variant"]
-		// Find the task for the other variant, if it exists
-		ts, err := task.Find(db.Query(bson.M{task.VersionKey: t.Version, task.BuildVariantKey: variantId,
-			task.DisplayNameKey: taskName}).Limit(1))
-		if err != nil {
-			if err == mgo.ErrNotFound {
-				plugin.WriteJSON(w, http.StatusNotFound, nil)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(ts) == 0 {
-			plugin.WriteJSON(w, http.StatusNotFound, nil)
-			return
-		}
-		otherVariantTask := ts[0]
-
-		var jsonForTask TaskJSON
-		err = db.FindOneQ(collection, db.Query(bson.M{"task_id": otherVariantTask.Id, "name": name}), &jsonForTask)
-		if err != nil {
-			if err == mgo.ErrNotFound {
-				plugin.WriteJSON(w, http.StatusNotFound, nil)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(r.FormValue("full")) != 0 { // if specified, include the json data's container as well
-			plugin.WriteJSON(w, http.StatusOK, jsonForTask)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, jsonForTask.Data)
-	})
+	r.HandleFunc("/data/{name}", insertTask)
+	r.HandleFunc("/data/{task_name}/{name}", getTaskByName)
+	r.HandleFunc("/data/{task_name}/{name}/{variant}", getTaskForVariant)
 	return r
 }
 
 func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 	r := mux.NewRouter()
-	r.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
-		plugin.WriteJSON(w, http.StatusOK, "1")
-	})
-	r.HandleFunc("/task/{task_id}/{name}/", func(w http.ResponseWriter, r *http.Request) {
-		var jsonForTask TaskJSON
-		err := db.FindOneQ(collection, db.Query(bson.M{"task_id": mux.Vars(r)["task_id"], "name": mux.Vars(r)["name"]}), &jsonForTask)
-		if err != nil {
-			if err != mgo.ErrNotFound {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			http.Error(w, "{}", http.StatusNotFound)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
-	})
 
-	r.HandleFunc("/task/{task_id}/{name}/tags", func(w http.ResponseWriter, r *http.Request) {
-		t, err := task.FindOne(task.ById(mux.Vars(r)["task_id"]))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		tags := []struct {
-			Tag string `bson:"_id" json:"tag"`
-		}{}
-		err = db.Aggregate(collection, []bson.M{
-			{"$match": bson.M{"project_id": t.Project, "tag": bson.M{"$exists": true, "$ne": ""}}},
-			{"$project": bson.M{"tag": 1}}, bson.M{"$group": bson.M{"_id": "$tag"}},
-		}, &tags)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, tags)
-	})
-	r.HandleFunc("/task/{task_id}/{name}/tag", func(w http.ResponseWriter, r *http.Request) {
-		t, err := task.FindOne(task.ById(mux.Vars(r)["task_id"]))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if t == nil {
-			http.Error(w, "{}", http.StatusNotFound)
-			return
-		}
-		if r.Method == "DELETE" {
-			if _, err = db.UpdateAll(collection,
-				bson.M{"version_id": t.Version, "name": mux.Vars(r)["name"]},
-				bson.M{"$unset": bson.M{"tag": 1}}); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			plugin.WriteJSON(w, http.StatusOK, "")
-		}
-		inTag := struct {
-			Tag string `json:"tag"`
-		}{}
-		err = util.ReadJSONInto(r.Body, &inTag)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(inTag.Tag) == 0 {
-			http.Error(w, "tag must not be blank", http.StatusBadRequest)
-			return
-		}
+	// version routes
+	r.HandleFunc("/version", getVersion)
+	r.HandleFunc("/version/{version_id}/{name}/", getTasksForVersion)
 
-		_, err = db.UpdateAll(collection,
-			bson.M{"version_id": t.Version, "name": mux.Vars(r)["name"]},
-			bson.M{"$set": bson.M{"tag": inTag.Tag}})
+	// task routes
+	r.HandleFunc("/task/{task_id}/{name}/", getTaskById)
+	r.HandleFunc("/task/{task_id}/{name}/tags", getTags)
+	r.HandleFunc("/task/{task_id}/{name}/tag", handleTaskTag)
 
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, "")
-	})
-	r.HandleFunc("/tag/{project_id}/{tag}/{variant}/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		var jsonForTask TaskJSON
-		err := db.FindOneQ(collection,
-			db.Query(bson.M{"project_id": mux.Vars(r)["project_id"],
-				"tag":       mux.Vars(r)["tag"],
-				"variant":   mux.Vars(r)["variant"],
-				"task_name": mux.Vars(r)["task_name"],
-				"name":      mux.Vars(r)["name"],
-			}), &jsonForTask)
-		if err != nil {
-			if err != mgo.ErrNotFound {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			http.Error(w, "{}", http.StatusNotFound)
-			return
-		}
-		if len(r.FormValue("full")) != 0 { // if specified, include the json data's container as well
-			plugin.WriteJSON(w, http.StatusOK, jsonForTask)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
-	})
-	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{task_name}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		var jsonForTask TaskJSON
-		err := db.FindOneQ(collection,
-			db.Query(bson.M{"project_id": mux.Vars(r)["project_id"],
-				"revision":  bson.RegEx{"^" + regexp.QuoteMeta(mux.Vars(r)["revision"]), "i"},
-				"variant":   mux.Vars(r)["variant"],
-				"task_name": mux.Vars(r)["task_name"],
-				"name":      mux.Vars(r)["name"],
-				"is_patch":  false,
-			}), &jsonForTask)
-		if err != nil {
-			if err != mgo.ErrNotFound {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			http.Error(w, "{}", http.StatusNotFound)
-			return
-		}
-		if len(r.FormValue("full")) != 0 { // if specified, include the json data's container as well
-			plugin.WriteJSON(w, http.StatusOK, jsonForTask)
-			return
-		}
-		plugin.WriteJSON(w, http.StatusOK, jsonForTask)
-	})
-	r.HandleFunc("/history/{task_id}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		t, err := task.FindOne(task.ById(mux.Vars(r)["task_id"]))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if t == nil {
-			http.Error(w, "{}", http.StatusNotFound)
-			return
-		}
-
-		var t2 *task.Task = t
-		if t.Requester == evergreen.PatchVersionRequester {
-			t2, err = t.FindTaskOnBaseCommit()
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			t.RevisionOrderNumber = t2.RevisionOrderNumber
-		}
-
-		before := []TaskJSON{}
-		jsonQuery := db.Query(bson.M{
-			"project_id": t.Project,
-			"variant":    t.BuildVariant,
-			"order":      bson.M{"$lte": t.RevisionOrderNumber},
-			"task_name":  t.DisplayName,
-			"is_patch":   false,
-			"name":       mux.Vars(r)["name"]})
-		jsonQuery = jsonQuery.Sort([]string{"-order"}).Limit(100)
-		err = db.FindAllQ(collection, jsonQuery, &before)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		//reverse order of "before" because we had to sort it backwards to apply the limit correctly:
-		for i, j := 0, len(before)-1; i < j; i, j = i+1, j-1 {
-			before[i], before[j] = before[j], before[i]
-		}
-
-		after := []TaskJSON{}
-		jsonAfterQuery := db.Query(bson.M{
-			"project_id": t.Project,
-			"variant":    t.BuildVariant,
-			"order":      bson.M{"$gt": t.RevisionOrderNumber},
-			"task_name":  t.DisplayName,
-			"is_patch":   false,
-			"name":       mux.Vars(r)["name"]}).Sort([]string{"order"}).Limit(100)
-		err = db.FindAllQ(collection, jsonAfterQuery, &after)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		//concatenate before + after
-		before = append(before, after...)
-
-		// if our task was a patch, replace the base commit's info in the history with the patch
-		if t.Requester == evergreen.PatchVersionRequester {
-			before, err = fixPatchInHistory(t.Id, t2, before)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-		plugin.WriteJSON(w, http.StatusOK, before)
-	})
+	r.HandleFunc("/tag/{project_id}/{tag}/{variant}/{task_name}/{name}", getTaskJSONByTag)
+	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{task_name}/{name}", getCommit)
+	r.HandleFunc("/history/{task_id}/{name}}", uiGetTaskHistory)
 	return r
 }
 
