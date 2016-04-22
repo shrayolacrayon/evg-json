@@ -248,8 +248,9 @@ func (jsp *JSONPlugin) GetAPIHandler() http.Handler {
 
 func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 	r := mux.NewRouter()
-	r.HandleFunc("/version", getVersion)
-	r.HandleFunc("/version/{version_id}/{name}/", getTasksForVersion)
+	r.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
+		plugin.WriteJSON(w, http.StatusOK, "1")
+	})
 	r.HandleFunc("/task/{task_id}/{name}/", func(w http.ResponseWriter, r *http.Request) {
 		var jsonForTask TaskJSON
 		err := db.FindOneQ(collection, db.Query(bson.M{"task_id": mux.Vars(r)["task_id"], "name": mux.Vars(r)["name"]}), &jsonForTask)
