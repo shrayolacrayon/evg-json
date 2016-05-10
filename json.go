@@ -93,7 +93,7 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 
 	r.HandleFunc("/tag/{project_id}/{tag}/{variant}/{task_name}/{name}", getTaskJSONByTag)
 	r.HandleFunc("/commit/{project_id}/{revision}/{variant}/{task_name}/{name}", getCommit)
-	r.HandleFunc("/history/{task_id}/{name}}", uiGetTaskHistory)
+	r.HandleFunc("/history/{task_id}/{name}", uiGetTaskHistory)
 	return r
 }
 
