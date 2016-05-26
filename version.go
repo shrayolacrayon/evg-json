@@ -1,13 +1,29 @@
 package evgjson
 
 import (
+	"net/http"
+	"time"
+
 	"github.com/evergreen-ci/evergreen/db"
+	"github.com/evergreen-ci/evergreen/model/version"
 	"github.com/evergreen-ci/evergreen/plugin"
 	"github.com/gorilla/mux"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	"net/http"
 )
+
+type CommitInfo struct {
+	Author     string    `json:"author"`
+	Message    string    `json:"message"`
+	CreateTime time.Time `json:"create_time"`
+	Revision   string    `json:"revision"`
+	VersionId  string    `json:"version_id"`
+}
+
+type VersionData struct {
+	JSONTasks []TaskJSON `json:"json_tasks"`
+	Commit    CommitInfo `json:"commit_info"`
+}
 
 // getVersion returns a StatusOK if the route is hit
 func getVersion(w http.ResponseWriter, r *http.Request) {
@@ -71,5 +87,26 @@ func getTasksForLatestVersion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	plugin.WriteJSON(w, http.StatusOK, jsonTasks)
+
+	// get the version commit info
+	v, err := version.FindOne(version.ById(jsonTask.VersionId))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if v == nil {
+		http.Error(w, "{}", http.StatusNotFound)
+		return
+	}
+
+	commitInfo := CommitInfo{
+		Author:     v.Author,
+		Message:    v.Message,
+		CreateTime: v.CreateTime,
+		Revision:   v.Revision,
+		VersionId:  jsonTask.VersionId,
+	}
+
+	data := VersionData{jsonTasks, commitInfo}
+	plugin.WriteJSON(w, http.StatusOK, data)
 }
