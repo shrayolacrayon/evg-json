@@ -7,6 +7,7 @@ import (
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model/version"
 	"github.com/evergreen-ci/evergreen/plugin"
+	"github.com/evergreen-ci/evergreen/util"
 	"github.com/gorilla/mux"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
@@ -65,51 +66,62 @@ func getTasksForVersion(w http.ResponseWriter, r *http.Request) {
 
 // getTasksForLatestVersion sends back the TaskJSON data associated with the latest version.
 func getTasksForLatestVersion(w http.ResponseWriter, r *http.Request) {
-	project := mux.Vars(r)["project_id"]
+
 	name := mux.Vars(r)["name"]
 	var jsonTask TaskJSON
-	err := db.FindOneQ(collection, db.Query(bson.M{NameKey: name,
-		ProjectIdKey: project}).Sort([]string{"-" + RevisionOrderNumberKey}).WithFields(VersionIdKey), &jsonTask)
+
+	projects := []string{}
+	err := util.ReadJSONInto(r.Body, &projects)
 	if err != nil {
-		if err != mgo.ErrNotFound {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	versionData := []VersionData{}
+	for _, project := range projects {
+		err := db.FindOneQ(collection, db.Query(bson.M{NameKey: name,
+			ProjectIdKey: project}).Sort([]string{"-" + RevisionOrderNumberKey}).WithFields(VersionIdKey), &jsonTask)
+		if err != nil {
+			if err != mgo.ErrNotFound {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			http.Error(w, "{}", http.StatusNotFound)
+			return
+		}
+		if jsonTask.VersionId == "" {
+			http.Error(w, "{}", http.StatusNotFound)
+		}
+		jsonTasks, err := findTasksForVersion(jsonTask.VersionId, name)
+		if jsonTasks == nil {
+			http.Error(w, "{}", http.StatusNotFound)
+			return
+		}
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		http.Error(w, "{}", http.StatusNotFound)
-		return
-	}
-	if jsonTask.VersionId == "" {
-		http.Error(w, "{}", http.StatusNotFound)
-	}
-	jsonTasks, err := findTasksForVersion(jsonTask.VersionId, name)
-	if jsonTasks == nil {
-		http.Error(w, "{}", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	// get the version commit info
-	v, err := version.FindOne(version.ById(jsonTask.VersionId))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if v == nil {
-		http.Error(w, "{}", http.StatusNotFound)
-		return
-	}
+		// get the version commit info
+		v, err := version.FindOne(version.ById(jsonTask.VersionId))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if v == nil {
+			http.Error(w, "{}", http.StatusNotFound)
+			return
+		}
 
-	commitInfo := CommitInfo{
-		Author:     v.Author,
-		Message:    v.Message,
-		CreateTime: v.CreateTime,
-		Revision:   v.Revision,
-		VersionId:  jsonTask.VersionId,
-	}
+		commitInfo := CommitInfo{
+			Author:     v.Author,
+			Message:    v.Message,
+			CreateTime: v.CreateTime,
+			Revision:   v.Revision,
+			VersionId:  jsonTask.VersionId,
+		}
 
-	data := VersionData{jsonTasks, commitInfo}
-	plugin.WriteJSON(w, http.StatusOK, data)
+		versionData = append(versionData, VersionData{jsonTasks, commitInfo})
+	}
+	plugin.WriteJSON(w, http.StatusOK, versionData)
 }
