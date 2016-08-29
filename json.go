@@ -84,8 +84,8 @@ func (hwp *JSONPlugin) GetUIHandler() http.Handler {
 
 	// version routes
 	r.HandleFunc("/version", getVersion)
-	r.HandleFunc("/version/{version_id}/{name}/", getTasksForVersion)
 	r.HandleFunc("/version/latest/{name}/", getTasksForLatestVersion)
+	r.HandleFunc("/version/{version_id}/{name}/", getTasksForVersion)
 
 	// task routes
 	r.HandleFunc("/task/{task_id}/{name}/", getTaskById)

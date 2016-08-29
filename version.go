@@ -1,6 +1,8 @@
 package evgjson
 
 import (
+	"fmt"
+	"io/ioutil"
 	"net/http"
 	"time"
 
@@ -66,62 +68,71 @@ func getTasksForVersion(w http.ResponseWriter, r *http.Request) {
 
 // getTasksForLatestVersion sends back the TaskJSON data associated with the latest version.
 func getTasksForLatestVersion(w http.ResponseWriter, r *http.Request) {
-
+	defer r.Body.Close()
 	name := mux.Vars(r)["name"]
 	var jsonTask TaskJSON
 
-	projects := []string{}
-	err := util.ReadJSONInto(r.Body, &projects)
+	fmt.Printf("BODY %#v", r.Body)
+	branches := map[string][]string{}
+	jsonBytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	versionData := []VersionData{}
-	for _, project := range projects {
-		err := db.FindOneQ(collection, db.Query(bson.M{NameKey: name,
-			ProjectIdKey: project}).Sort([]string{"-" + RevisionOrderNumberKey}).WithFields(VersionIdKey), &jsonTask)
-		if err != nil {
-			if err != mgo.ErrNotFound {
+	err = util.ReadJSONInto(jsonBytes, &branches)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	branchData := map[string][]VersionData{}
+	for branchName, projects := range branches {
+		versionData := []VersionData{}
+		for _, project := range projects {
+			err := db.FindOneQ(collection, db.Query(bson.M{NameKey: name,
+				ProjectIdKey: project}).Sort([]string{"-" + RevisionOrderNumberKey}).WithFields(VersionIdKey), &jsonTask)
+			if err != nil {
+				if err != mgo.ErrNotFound {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				http.Error(w, "{}", http.StatusNotFound)
+				return
+			}
+			if jsonTask.VersionId == "" {
+				http.Error(w, "{}", http.StatusNotFound)
+			}
+			jsonTasks, err := findTasksForVersion(jsonTask.VersionId, name)
+			if jsonTasks == nil {
+				http.Error(w, "{}", http.StatusNotFound)
+				return
+			}
+			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			http.Error(w, "{}", http.StatusNotFound)
-			return
-		}
-		if jsonTask.VersionId == "" {
-			http.Error(w, "{}", http.StatusNotFound)
-		}
-		jsonTasks, err := findTasksForVersion(jsonTask.VersionId, name)
-		if jsonTasks == nil {
-			http.Error(w, "{}", http.StatusNotFound)
-			return
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
 
-		// get the version commit info
-		v, err := version.FindOne(version.ById(jsonTask.VersionId))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if v == nil {
-			http.Error(w, "{}", http.StatusNotFound)
-			return
-		}
+			// get the version commit info
+			v, err := version.FindOne(version.ById(jsonTask.VersionId))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if v == nil {
+				http.Error(w, "{}", http.StatusNotFound)
+				return
+			}
 
-		commitInfo := CommitInfo{
-			Author:     v.Author,
-			Message:    v.Message,
-			CreateTime: v.CreateTime,
-			Revision:   v.Revision,
-			VersionId:  jsonTask.VersionId,
-		}
+			commitInfo := CommitInfo{
+				Author:     v.Author,
+				Message:    v.Message,
+				CreateTime: v.CreateTime,
+				Revision:   v.Revision,
+				VersionId:  jsonTask.VersionId,
+			}
 
-		versionData = append(versionData, VersionData{jsonTasks, commitInfo})
+			versionData = append(versionData, VersionData{jsonTasks, commitInfo})
+		}
+		branchData[branchName] = versionData
 	}
-	plugin.WriteJSON(w, http.StatusOK, versionData)
+	plugin.WriteJSON(w, http.StatusOK, branchData)
 }
